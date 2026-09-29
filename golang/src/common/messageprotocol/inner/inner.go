@@ -2,69 +2,46 @@ package inner
 
 import (
 	"encoding/json"
-	"errors"
 
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/middleware"
 )
 
-func serializeJson(message []interface{}) ([]byte, error) {
-	return json.Marshal(message)
+type wireRecord struct {
+	Fruit  string `json:"fruit"`
+	Amount uint32 `json:"amount"`
 }
 
-func deserializeJson(message []byte) ([]interface{}, error) {
-	var data []interface{}
-	if err := json.Unmarshal(message, &data); err != nil {
-		return nil, err
-	}
-	return data, nil
+type wireMessage struct {
+	ClientId string       `json:"client_id"`
+	Records  []wireRecord `json:"records"`
+	Eof      bool         `json:"eof"`
 }
 
-func SerializeMessage(fruitRecords []fruititem.FruitItem) (*middleware.Message, error) {
-	data := []interface{}{}
+func SerializeMessage(clientId string, fruitRecords []fruititem.FruitItem, eof bool) (*middleware.Message, error) {
+	records := make([]wireRecord, 0, len(fruitRecords))
 	for _, fruitRecord := range fruitRecords {
-		datum := []interface{}{
-			fruitRecord.Fruit,
-			fruitRecord.Amount,
-		}
-		data = append(data, datum)
+		records = append(records, wireRecord{Fruit: fruitRecord.Fruit, Amount: fruitRecord.Amount})
 	}
 
-	body, err := serializeJson(data)
+	body, err := json.Marshal(wireMessage{ClientId: clientId, Records: records, Eof: eof})
 	if err != nil {
 		return nil, err
 	}
-	message := middleware.Message{Body: string(body)}
 
-	return &message, nil
+	return &middleware.Message{Body: string(body)}, nil
 }
 
-func DeserializeMessage(message *middleware.Message) ([]fruititem.FruitItem, bool, error) {
-	data, err := deserializeJson([]byte((*message).Body))
-	if err != nil {
-		return nil, false, err
+func DeserializeMessage(message *middleware.Message) (clientId string, fruitRecords []fruititem.FruitItem, eof bool, err error) {
+	var wire wireMessage
+	if err := json.Unmarshal([]byte(message.Body), &wire); err != nil {
+		return "", nil, false, err
 	}
 
-	fruitRecords := []fruititem.FruitItem{}
-	for _, datum := range data {
-		fruitPair, ok := datum.([]interface{})
-		if !ok {
-			return nil, false, errors.New("Datum is not an array")
-		}
-
-		fruit, ok := fruitPair[0].(string)
-		if !ok {
-			return nil, false, errors.New("Datum is not a (fruit, amount) pair")
-		}
-
-		fruitAmount, ok := fruitPair[1].(float64)
-		if !ok {
-			return nil, false, errors.New("Datum is not a (fruit, amount) pair")
-		}
-
-		fruitRecord := fruititem.FruitItem{Fruit: fruit, Amount: uint32(fruitAmount)}
-		fruitRecords = append(fruitRecords, fruitRecord)
+	fruitRecords = make([]fruititem.FruitItem, 0, len(wire.Records))
+	for _, record := range wire.Records {
+		fruitRecords = append(fruitRecords, fruititem.FruitItem{Fruit: record.Fruit, Amount: record.Amount})
 	}
 
-	return fruitRecords, len(fruitRecords) == 0, nil
+	return wire.ClientId, fruitRecords, wire.Eof, nil
 }
