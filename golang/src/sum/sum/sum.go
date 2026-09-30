@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/fruititem"
 	"github.com/7574-sistemas-distribuidos/tp-coordinacion/common/messageprotocol/inner"
@@ -35,6 +38,7 @@ type Sum struct {
 
 	dataDeliveries    chan sumDelivery
 	controlDeliveries chan sumDelivery
+	done              chan struct{}
 
 	clientFruitItemMaps map[string]map[string]fruititem.FruitItem
 }
@@ -97,11 +101,13 @@ func NewSum(config SumConfig) (*Sum, error) {
 		eofListen:           eofListen,
 		dataDeliveries:      make(chan sumDelivery),
 		controlDeliveries:   make(chan sumDelivery),
+		done:                make(chan struct{}),
 		clientFruitItemMaps: map[string]map[string]fruititem.FruitItem{},
 	}, nil
 }
 
 func (sum *Sum) Run() {
+	go sum.handleSignals()
 	go sum.inputQueue.StartConsuming(func(msg middleware.Message, ack, nack func()) {
 		sum.dataDeliveries <- sumDelivery{msg, ack, nack}
 	})
@@ -111,11 +117,22 @@ func (sum *Sum) Run() {
 	sum.coordinate()
 }
 
+func (sum *Sum) handleSignals() {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	<-signals
+	sum.inputQueue.StopConsuming()
+	sum.eofListen.StopConsuming()
+	close(sum.done)
+}
+
 func (sum *Sum) coordinate() {
 	for {
 		sum.drainData()
 
 		select {
+		case <-sum.done:
+			return
 		case delivery := <-sum.dataDeliveries:
 			sum.handleData(delivery)
 		case delivery := <-sum.controlDeliveries:

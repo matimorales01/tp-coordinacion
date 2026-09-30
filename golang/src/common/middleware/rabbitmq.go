@@ -31,8 +31,9 @@ func dial(settings ConnSettings) (*amqp.Connection, *amqp.Channel, error) {
 	return conn, channel, nil
 }
 
-func consume(channel *amqp.Channel, queueName string, callbackFunc func(msg Message, ack func(), nack func())) error {
+func consume(channel *amqp.Channel, queueName string, consumerTagHolder *atomic.Value, callbackFunc func(msg Message, ack func(), nack func())) error {
 	consumerTag := nextConsumerTag()
+	consumerTagHolder.Store(consumerTag)
 	closeNotify := channel.NotifyClose(make(chan *amqp.Error, 1))
 
 	deliveries, err := channel.Consume(queueName, consumerTag, false, false, false, false, nil)
@@ -59,11 +60,15 @@ func consume(channel *amqp.Channel, queueName string, callbackFunc func(msg Mess
 	return nil
 }
 
-func cancelConsuming(channel *amqp.Channel) error {
+func cancelConsuming(channel *amqp.Channel, consumerTagHolder *atomic.Value) error {
 	if channel.IsClosed() {
 		return nil
 	}
-	if err := channel.Cancel("", true); err != nil {
+	consumerTag, ok := consumerTagHolder.Load().(string)
+	if !ok {
+		return nil
+	}
+	if err := channel.Cancel(consumerTag, false); err != nil {
 		return ErrMessageMiddlewareDisconnected
 	}
 	return nil
@@ -80,10 +85,11 @@ func closeConnection(conn *amqp.Connection, channel *amqp.Channel) error {
 }
 
 type MessageMiddlewareQueueRabbitMQ struct {
-	conn      *amqp.Connection
-	channel   *amqp.Channel
-	queueName string
-	sendMutex sync.Mutex
+	conn        *amqp.Connection
+	channel     *amqp.Channel
+	queueName   string
+	sendMutex   sync.Mutex
+	consumerTag atomic.Value
 }
 
 func newQueueMiddleware(queueName string, settings ConnSettings) (*MessageMiddlewareQueueRabbitMQ, error) {
@@ -101,11 +107,11 @@ func newQueueMiddleware(queueName string, settings ConnSettings) (*MessageMiddle
 }
 
 func (middleware *MessageMiddlewareQueueRabbitMQ) StartConsuming(callbackFunc func(msg Message, ack func(), nack func())) error {
-	return consume(middleware.channel, middleware.queueName, callbackFunc)
+	return consume(middleware.channel, middleware.queueName, &middleware.consumerTag, callbackFunc)
 }
 
 func (middleware *MessageMiddlewareQueueRabbitMQ) StopConsuming() error {
-	return cancelConsuming(middleware.channel)
+	return cancelConsuming(middleware.channel, &middleware.consumerTag)
 }
 
 func (middleware *MessageMiddlewareQueueRabbitMQ) Send(msg Message) error {
@@ -136,6 +142,7 @@ type MessageMiddlewareExchangeRabbitMQ struct {
 	exchangeName string
 	routingKeys  []string
 	sendMutex    sync.Mutex
+	consumerTag  atomic.Value
 }
 
 func newExchangeMiddleware(exchangeName string, routingKeys []string, settings ConnSettings) (*MessageMiddlewareExchangeRabbitMQ, error) {
@@ -169,11 +176,11 @@ func (middleware *MessageMiddlewareExchangeRabbitMQ) StartConsuming(callbackFunc
 		}
 	}
 
-	return consume(middleware.channel, queue.Name, callbackFunc)
+	return consume(middleware.channel, queue.Name, &middleware.consumerTag, callbackFunc)
 }
 
 func (middleware *MessageMiddlewareExchangeRabbitMQ) StopConsuming() error {
-	return cancelConsuming(middleware.channel)
+	return cancelConsuming(middleware.channel, &middleware.consumerTag)
 }
 
 func (middleware *MessageMiddlewareExchangeRabbitMQ) Send(msg Message) error {
