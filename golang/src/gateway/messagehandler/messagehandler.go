@@ -33,7 +33,7 @@ func (messageHandler *MessageHandler) SerializeEOFMessage() (*middleware.Message
 }
 
 func (messageHandler *MessageHandler) DeserializeResultMessage(message *middleware.Message) ([]fruititem.FruitItem, error) {
-	clientId, fruitRecords, _, err := inner.DeserializeMessage(message)
+	clientId, fruitRecords, _, _, err := inner.DeserializeMessage(message)
 	if err != nil {
 		return nil, err
 	}

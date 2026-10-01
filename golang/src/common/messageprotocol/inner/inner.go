@@ -13,9 +13,10 @@ type wireRecord struct {
 }
 
 type wireMessage struct {
-	ClientId string       `json:"client_id"`
-	Records  []wireRecord `json:"records"`
-	Eof      bool         `json:"eof"`
+	ClientId       string       `json:"client_id"`
+	Records        []wireRecord `json:"records"`
+	Eof            bool         `json:"eof"`
+	FlushRemaining int          `json:"flush_remaining,omitempty"`
 }
 
 func SerializeMessage(clientId string, fruitRecords []fruititem.FruitItem, eof bool) (*middleware.Message, error) {
@@ -32,10 +33,18 @@ func SerializeMessage(clientId string, fruitRecords []fruititem.FruitItem, eof b
 	return &middleware.Message{Body: string(body)}, nil
 }
 
-func DeserializeMessage(message *middleware.Message) (clientId string, fruitRecords []fruititem.FruitItem, eof bool, err error) {
+func SerializeFlushToken(clientId string, remaining int) (*middleware.Message, error) {
+	body, err := json.Marshal(wireMessage{ClientId: clientId, Eof: true, FlushRemaining: remaining})
+	if err != nil {
+		return nil, err
+	}
+	return &middleware.Message{Body: string(body)}, nil
+}
+
+func DeserializeMessage(message *middleware.Message) (clientId string, fruitRecords []fruititem.FruitItem, eof bool, flushRemaining int, err error) {
 	var wire wireMessage
 	if err := json.Unmarshal([]byte(message.Body), &wire); err != nil {
-		return "", nil, false, err
+		return "", nil, false, 0, err
 	}
 
 	fruitRecords = make([]fruititem.FruitItem, 0, len(wire.Records))
@@ -43,5 +52,5 @@ func DeserializeMessage(message *middleware.Message) (clientId string, fruitReco
 		fruitRecords = append(fruitRecords, fruititem.FruitItem{Fruit: record.Fruit, Amount: record.Amount})
 	}
 
-	return wire.ClientId, fruitRecords, wire.Eof, nil
+	return wire.ClientId, fruitRecords, wire.Eof, wire.FlushRemaining, nil
 }
